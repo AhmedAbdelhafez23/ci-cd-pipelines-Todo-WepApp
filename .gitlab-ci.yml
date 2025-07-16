@@ -1,0 +1,120 @@
+stages:
+  - build
+  - test
+  - deploy
+  - monitoring
+  - docker-check
+  
+  
+
+before_script:
+  - mkdir -p ~/.m2
+  - echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+              <proxies>
+                  <proxy>
+                      <id>th-wildau-proxy</id>
+                      <active>true</active>
+                      <protocol>http</protocol>
+                      <host>proxy.th-wildau.de</host>
+                      <port>8080</port>
+                      <nonProxyHosts>www.google.com|*.th-wildau.de|*.tfh-wildau.de</nonProxyHosts>
+                  </proxy>
+              </proxies>
+          </settings>' > ~/.m2/settings.xml
+
+variables:
+  HTTP_PROXY: "http://proxy.th-wildau.de:8080"
+  HTTPS_PROXY: "http://proxy.th-wildau.de:8080"
+  NO_PROXY: "localhost,127.0.0.1,.th-wildau.de"
+  DOCKER_IMAGE: "registry.git.th-wildau.de/wir/cloudcomputing/ws24-25/ci_cd-server-152:latest"
+
+# Build Stage
+build:
+  stage: build
+  image: docker:20.10
+  script:
+    - docker system prune -f || true
+    - docker-compose build --no-cache
+  artifacts:
+    paths:
+      - target/*.jar
+    expire_in: 1 week
+  tags:
+    - new runner
+
+# Test Stage
+test:
+  stage: test
+  image: maven:3.9.9-eclipse-temurin-23
+  services:
+    - name: mariadb:10.5
+      alias: mariadb
+  variables:
+    MYSQL_ROOT_PASSWORD: 123
+    MYSQL_DATABASE: todo_app
+    MYSQL_USER: todo_user
+    MYSQL_PASSWORD: todo_pass
+  script:
+    - echo "Waiting for MariaDB to start..."
+    - until bash -c 'echo > /dev/tcp/mariadb/3306'; do sleep 1; done
+    - echo "MariaDB is up. Running tests..."
+    - mvn test -e -X
+  tags:
+    - new runner
+
+# Deploy Stage
+deploy:
+  stage: deploy
+  image: docker:20.10
+  script:
+    - echo "Stopping existing containers..."
+    - docker-compose down || true
+    - echo "Starting new deployment..."
+    - docker-compose up -d
+    - echo "Deployment completed. Verifying running containers..."
+    - docker ps -a
+  environment:
+    name: production
+    url: http://10.100.8.152
+  only:
+    - main
+    - feature/logs-monitoring
+  tags:
+    - new runner
+
+# Monitoring Stage
+monitoring:
+  stage: monitoring
+  image: docker:20.10
+  script:
+    - echo "Starting Loki, Promtail, and Grafana..."
+    - docker-compose up -d loki promtail grafana
+  tags:
+    - new runner
+
+# Docker Status Check Stage
+docker_status:
+  stage: docker-check
+  image: docker:20.10
+  services:
+    - docker:dind
+  script:
+    - echo "Checking running Docker containers..."
+    - docker ps
+    - RUNNING_CONTAINERS=$(docker ps -q)
+    - |
+      if [ -z "$(docker ps -q)" ]; then
+        echo "Error: No containers are running."
+        exit 1
+      else
+        echo "All containers are running."
+      fi
+  tags:
+    - new runner
+
+
+
+
+  

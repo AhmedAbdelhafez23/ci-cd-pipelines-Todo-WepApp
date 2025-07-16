@@ -1,0 +1,18 @@
+# Use the official Loki image
+FROM grafana/loki:2.9.0
+
+# Switch to root to create necessary directories and set permissions
+USER root
+
+# Create directories and set proper permissions for Loki to write
+RUN mkdir -p /data /wal /tmp/loki/index /tmp/loki/chunks && \
+    chmod -R 777 /data /wal /tmp/loki
+
+# Switch back to Loki's default user (10001) to run Loki safely
+USER 10001
+
+# Copy the Loki config file into the container
+COPY loki-config.yaml /etc/loki/local-config.yml
+
+# Set the default command for Loki
+CMD ["-config.file=/etc/loki/local-config.yml"]
