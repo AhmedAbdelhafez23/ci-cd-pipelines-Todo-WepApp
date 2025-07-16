@@ -1,0 +1,106 @@
+stages:
+  - build
+  - test
+  - deploy
+  - cleanup
+
+before_script:
+  - mkdir -p ~/.m2
+  - echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+              <proxies>
+                  <proxy>
+                      <id>th-wildau-proxy</id>
+                      <active>true</active>
+                      <protocol>http</protocol>
+                      <host>proxy.th-wildau.de</host>
+                      <port>8080</port>
+                      <nonProxyHosts>www.google.com|*.th-wildau.de|*.tfh-wildau.de</nonProxyHosts>
+                  </proxy>
+              </proxies>
+          </settings>' > ~/.m2/settings.xml
+
+variables:
+  HTTP_PROXY: "http://proxy.th-wildau.de:8080"
+  HTTPS_PROXY: "http://proxy.th-wildau.de:8080"
+  NO_PROXY: "localhost,127.0.0.1,.th-wildau.de"
+  DOCKER_IMAGE: "registry.git.th-wildau.de/wir/cloudcomputing/ws24-25/ci_cd-server-152:latest"
+
+# Verwende OpenJDK 23 als Standard-Image
+image:
+  name: maven:3.9.9-eclipse-temurin-23
+
+# Build Stage
+build:
+  stage: build
+  image: docker:20.10
+  script:
+    - docker-compose build --no-cache
+  artifacts:
+    paths:
+      - target/*.jar
+    expire_in: 1 week
+  tags:
+    - new runner
+
+# Test Stage - Unit Tests
+unit_tests:
+  stage: test
+  image: maven:3.9.9-eclipse-temurin-23
+  script:
+    - echo "Running Unit Tests..."
+    - mvn test -Dtest=*UnitTest
+  tags:
+    - new runner
+
+# Test Stage - Integration Tests
+integration_tests:
+  stage: test
+  image: maven:3.9.9-eclipse-temurin-23
+  services:
+    - name: mariadb:10.5
+      alias: mariadb
+  variables:
+    MYSQL_ROOT_PASSWORD: 123
+    MYSQL_DATABASE: todo_app
+    MYSQL_USER: todo_user
+    MYSQL_PASSWORD: todo_pass
+  script:
+    - echo "Waiting for MariaDB to start..."
+    - until bash -c 'echo > /dev/tcp/mariadb/3306'; do sleep 1; done
+    - echo "MariaDB is up. Running Integration Tests..."
+    - mvn test -Dtest=*IntegrationTest
+  tags:
+    - new runner
+
+# Deploy Stage
+deploy:
+  stage: deploy
+  image: docker:20.10
+  script:
+    - echo "Stopping existing containers..."
+    - docker-compose down || true
+    - echo "Starting new deployment..."
+    - docker-compose up -d
+    - echo "Deployment completed. Verifying running containers..."
+    - docker ps -a
+  environment:
+    name: production
+    url: http://10.100.8.152
+  only:
+    - main
+    - change-submit-button
+  tags:
+    - new runner
+
+# Cleanup Stage
+#cleanup:
+#  stage: cleanup
+#  image: alpine:3.18
+#  script:
+#    - echo "Cleaning up temporary files..."
+#    - docker system prune -af --volumes
+#  when: always
+#  tags:
+#    - new runner
